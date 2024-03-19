@@ -760,7 +760,6 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(st7789_ST7789_write_len_obj, 3, 3, st
 //	write(font_module, s, x, y[, fg, bg, background_tuple, fill])
 //		background_tuple (bitmap_buffer, width, height)
 //
-
 static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     st7789_ST7789_obj_t *self = MP_OBJ_TO_PTR(args[0]);
     mp_obj_module_t *font = MP_OBJ_TO_PTR(args[1]);
@@ -814,10 +813,39 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     mp_get_buffer_raise(bitmaps_data_buff, &bitmaps_bufinfo, MP_BUFFER_READ);
     bitmap_data = bitmaps_bufinfo.buf;
 
-    // allocate buffer large enough the the widest character in the font
+
+    uint16_t printed_width = 0;
+    mp_obj_t map_obj = mp_obj_dict_get(dict, MP_OBJ_NEW_QSTR(MP_QSTR_MAP));
+    GET_STR_DATA_LEN(map_obj, map_data, map_len);
+    GET_STR_DATA_LEN(args[2], str_data, str_len);
+    const byte *s = str_data, *top = str_data + str_len;
+    const byte *s2 = str_data, *top2 = str_data + str_len;
+
+    while (s < top) {
+        unichar ch;
+        ch = utf8_get_char(s);
+        s = utf8_next_char(s);
+
+        const byte *map_s = map_data, *map_top = map_data + map_len;
+        uint16_t char_index = 0;
+
+        while (map_s < map_top) {
+            unichar map_ch;
+            map_ch = utf8_get_char(map_s);
+            map_s = utf8_next_char(map_s);
+
+            if (ch == map_ch) {
+                printed_width += widths_data[char_index];
+                break;
+            }
+            char_index++;
+        }
+    }
+
+    // allocate buffer large enough for the largest block
     // if a buffer was not specified during the driver init.
 
-    size_t buf_size = max_width * height * 2;
+    size_t buf_size = printed_width * height * 2;
     if (self->buffer_size == 0) {
         self->i2c_buffer = m_malloc(buf_size);
     }
@@ -830,15 +858,13 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         memcpy(self->i2c_buffer, background_data, background_width * background_height * 2);
     }
 
+    uint16_t startx = x;
+    uint16_t starty = y;
     uint16_t print_width = 0;
-    mp_obj_t map_obj = mp_obj_dict_get(dict, MP_OBJ_NEW_QSTR(MP_QSTR_MAP));
-    GET_STR_DATA_LEN(map_obj, map_data, map_len);
-    GET_STR_DATA_LEN(args[2], str_data, str_len);
-    const byte *s = str_data, *top = str_data + str_len;
-    while (s < top) {
+    while (s2 < top2) {
         unichar ch;
-        ch = utf8_get_char(s);
-        s = utf8_next_char(s);
+        ch = utf8_get_char(s2);
+        s2 = utf8_next_char(s2);
 
         const byte *map_s = map_data, *map_top = map_data + map_len;
         uint16_t char_index = 0;
@@ -883,19 +909,11 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         } else {
                             color = get_color(bpp) ? fg_color : bg_color;
                         }
-                        self->i2c_buffer[yy * buffer_width + xx] = color;
+                        self->i2c_buffer[(print_width + xx) + (yy * printed_width)] = color;
                     }
                 }
-
-                uint32_t data_size = buffer_width * height * 2;
                 uint16_t x2 = x + buffer_width - 1;
-                uint16_t y2 = y + height - 1;
                 if (x2 < self->width) {
-                    set_window(self, x, y, x2, y2);
-                    DC_HIGH();
-                    CS_LOW();
-                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, data_size);
-                    CS_HIGH();
                     print_width += width;
                 }
                 x += width;
@@ -903,6 +921,14 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
             }
             char_index++;
         }
+    }
+
+    if(print_width > 0) {
+        set_window(self, startx, starty, startx+print_width-1, starty+height-1);
+        DC_HIGH();
+        CS_LOW();
+        write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, buf_size);
+        CS_HIGH();
     }
 
     if (self->buffer_size == 0) {
