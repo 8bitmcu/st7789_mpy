@@ -1,6 +1,13 @@
 
 # ST7789 Driver for MicroPython
 
+
+This driver is a fork of [russhughes's st7789 mpy driver](https://github.com/russhughes/st7789_mpy).
+This driver is faster at rending text through the write() function, as it buffers the whole text-block before rendering it.
+
+
+---
+
 This driver is based on [devbis' st7789_mpy driver.](https://github.com/devbis/st7789_mpy)
 I modified the original driver for one of my projects to add:
 
