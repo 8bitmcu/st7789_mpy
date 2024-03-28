@@ -760,6 +760,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(st7789_ST7789_write_len_obj, 3, 3, st
 //	write(font_module, s, x, y[, fg, bg, background_tuple, fill])
 //		background_tuple (bitmap_buffer, width, height)
 //
+//
 static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     st7789_ST7789_obj_t *self = MP_OBJ_TO_PTR(args[0]);
     mp_obj_module_t *font = MP_OBJ_TO_PTR(args[1]);
@@ -813,13 +814,26 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     mp_get_buffer_raise(bitmaps_data_buff, &bitmaps_bufinfo, MP_BUFFER_READ);
     bitmap_data = bitmaps_bufinfo.buf;
 
-
-    uint16_t printed_width = 0;
     mp_obj_t map_obj = mp_obj_dict_get(dict, MP_OBJ_NEW_QSTR(MP_QSTR_MAP));
     GET_STR_DATA_LEN(map_obj, map_data, map_len);
     GET_STR_DATA_LEN(args[2], str_data, str_len);
     const byte *s = str_data, *top = str_data + str_len;
     const byte *s2 = str_data, *top2 = str_data + str_len;
+
+    size_t buf_size = 0;
+    uint16_t block_count = 0;
+    uint16_t block_widths[str_len];
+    uint16_t printed_width = 0;
+
+    if (self->buffer_size == 0) {
+        // allocate buffer large enough for the largest character
+        // if a buffer was not specified during the driver init.
+        buf_size = max_width * height * 2;
+        self->i2c_buffer = m_malloc(buf_size);
+    }
+    else {
+        buf_size = self->buffer_size;
+    }
 
     while (s < top) {
         unichar ch;
@@ -835,32 +849,42 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
             map_s = utf8_next_char(map_s);
 
             if (ch == map_ch) {
-                printed_width += widths_data[char_index];
+
+                uint8_t w = widths_data[char_index];
+
+                // The goal here is to create a table of block widths.
+                // A block representing a single spi transaction with one
+                // or more characters.
+                if ((printed_width+w)*height*2 > buf_size) {
+                    block_widths[block_count++] = printed_width;
+                    printed_width = 0;
+                }
+
+                printed_width += w;
+
                 break;
             }
             char_index++;
         }
     }
 
-    // allocate buffer large enough for the largest block
-    // if a buffer was not specified during the driver init.
-
-    size_t buf_size = printed_width * height * 2;
-    if (self->buffer_size == 0) {
-        self->i2c_buffer = m_malloc(buf_size);
+    if (printed_width > 0) {
+        block_widths[block_count++] = printed_width;
     }
 
     // if fill is set, and background bitmap data is available copy the background
     // bitmap data into the buffer. The background buffer must be the size of the
     // widest character in the font.
 
+    // TODO: haven't tried background_data but I suspect it's all fubar
     if (fill && background_data && self->i2c_buffer) {
         memcpy(self->i2c_buffer, background_data, background_width * background_height * 2);
     }
 
-    uint16_t startx = x;
-    uint16_t starty = y;
     uint16_t print_width = 0;
+    uint16_t block_index = 0;
+    uint16_t print_x = x;
+
     while (s2 < top2) {
         unichar ch;
         ch = utf8_get_char(s2);
@@ -873,7 +897,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
             unichar map_ch;
             map_ch = utf8_get_char(map_s);
             map_s = utf8_next_char(map_s);
-
+	
             if (ch == map_ch) {
                 uint8_t width = widths_data[char_index];
 
@@ -897,6 +921,17 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
                 uint16_t buffer_width = (fill) ? max_width : width;
 
+                if (print_width+buffer_width > block_widths[block_index]) {
+                    set_window(self, print_x, y, print_x+block_widths[block_index]-1, y+height-1);
+                    DC_HIGH();
+                    CS_LOW();
+                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_widths[block_index]*height*2);
+                    CS_HIGH();
+                    print_x += block_widths[block_index];
+                    block_index++;
+                    print_width = 0;
+                }
+
                 uint16_t color = 0;
                 for (uint16_t yy = 0; yy < height; yy++) {
                     for (uint16_t xx = 0; xx < width; xx++) {
@@ -909,13 +944,14 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         } else {
                             color = get_color(bpp) ? fg_color : bg_color;
                         }
-                        self->i2c_buffer[(print_width + xx) + (yy * printed_width)] = color;
+                        self->i2c_buffer[(print_width + xx) + (yy * block_widths[block_index])] = color;
                     }
                 }
                 uint16_t x2 = x + buffer_width - 1;
                 if (x2 < self->width) {
                     print_width += width;
                 }
+
                 x += width;
                 break;
             }
@@ -923,11 +959,11 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         }
     }
 
-    if(print_width > 0) {
-        set_window(self, startx, starty, startx+print_width-1, starty+height-1);
+    if (print_width > 0) {
+        set_window(self, print_x, y, print_x+block_widths[block_index]-1, y+height-1);
         DC_HIGH();
         CS_LOW();
-        write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, buf_size);
+        write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_widths[block_index]*height*2);
         CS_HIGH();
     }
 
