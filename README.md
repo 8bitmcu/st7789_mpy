@@ -3,7 +3,11 @@
 
 
 This driver is a fork of [russhughes's st7789 mpy driver](https://github.com/russhughes/st7789_mpy).
-This driver is faster at rending text through the write() function, as it buffers the whole text-block before rendering it.
+This driver is faster at rending text through the write() function:
+
+The original driver writes a single character at a time, creating a lot of SPI transactions. There is a significant amount of wait time between spi transactions. 
+This driver mitigates that by buffering blocks of text at the time before displaying them. This results in less spi transactions and faster rendering, which is
+noticeable with small fonts / lots of characters. The drawback is that a larger buffer needs to be supplied in tft_config(), an therefore uses more RAM.
 
 
 ---
