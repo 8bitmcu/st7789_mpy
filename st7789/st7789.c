@@ -760,7 +760,6 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(st7789_ST7789_write_len_obj, 3, 3, st
 //	write(font_module, s, x, y[, fg, bg, background_tuple, fill])
 //		background_tuple (bitmap_buffer, width, height)
 //
-//
 static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     st7789_ST7789_obj_t *self = MP_OBJ_TO_PTR(args[0]);
     mp_obj_module_t *font = MP_OBJ_TO_PTR(args[1]);
@@ -829,6 +828,8 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         buf_size = self->buffer_size;
     }
 
+    // we only see gains in speed when buffering more than one character
+    bool build_blocks = str_len > 1 || buf_size > max_width * height * 2;
 
     // the idea is to build a table of block_widths, each block
     // reprensents a single SPI transaction of one or more character(s).
@@ -836,8 +837,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     uint16_t block_widths[str_len];
     uint16_t block_width = 0;
     const byte *s = str_data, *top = str_data + str_len;
-    // we only start seeing gains in speed beyond 1 character
-    if (str_len > 1) {
+    if (build_blocks) {
         while (s < top) {
             unichar ch;
             ch = utf8_get_char(s);
@@ -909,8 +909,8 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
                 uint16_t buffer_width = (fill) ? max_width : width;
                 uint16_t color = 0;
-                if (str_len == 1) {
-                    block_widths[0] = buffer_width;
+                if (!build_blocks) {
+                    block_widths[block_index] = buffer_width;
                 }
                 for (uint16_t yy = 0; yy < height; yy++) {
                     for (uint16_t xx = 0; xx < buffer_width; xx++) {
