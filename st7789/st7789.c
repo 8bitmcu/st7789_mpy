@@ -824,6 +824,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     uint16_t block_count = 0;
     uint16_t block_widths[str_len];
     uint16_t printed_width = 0;
+    uint16_t total_width = 0;
 
     if (self->buffer_size == 0) {
         // allocate buffer large enough for the largest character
@@ -850,17 +851,15 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
             if (ch == map_ch) {
 
-                uint8_t w = widths_data[char_index];
+                uint16_t w = (fill) ? max_width : widths_data[char_index];
 
-                // The goal here is to create a table of block widths.
-                // A block representing a single spi transaction with one
-                // or more characters.
                 if ((printed_width+w)*height*2 > buf_size) {
                     block_widths[block_count++] = printed_width;
                     printed_width = 0;
                 }
 
                 printed_width += w;
+                total_width += w;
 
                 break;
             }
@@ -872,18 +871,12 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         block_widths[block_count++] = printed_width;
     }
 
-    // if fill is set, and background bitmap data is available copy the background
-    // bitmap data into the buffer. The background buffer must be the size of the
-    // widest character in the font.
 
-    // TODO: haven't tried background_data but I suspect it's all fubar
-    if (fill && background_data && self->i2c_buffer) {
-        memcpy(self->i2c_buffer, background_data, background_width * background_height * 2);
-    }
 
     uint16_t print_width = 0;
     uint16_t block_index = 0;
     uint16_t print_x = x;
+    total_width = 0;
 
     while (s2 < top2) {
         unichar ch;
@@ -897,7 +890,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
             unichar map_ch;
             map_ch = utf8_get_char(map_s);
             map_s = utf8_next_char(map_s);
-	
+
             if (ch == map_ch) {
                 uint8_t width = widths_data[char_index];
 
@@ -919,25 +912,24 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         break;
                 }
 
-                uint16_t buffer_width = (fill) ? max_width : width;
-
-                if (print_width+buffer_width > block_widths[block_index]) {
-                    set_window(self, print_x, y, print_x+block_widths[block_index]-1, y+height-1);
+                if (print_width == block_widths[block_index]) {
+                    set_window(self, print_x, y, print_x+print_width-1, y+height-1);
                     DC_HIGH();
                     CS_LOW();
-                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_widths[block_index]*height*2);
+                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, print_width*height*2);
                     CS_HIGH();
-                    print_x += block_widths[block_index];
+                    print_x += print_width;
                     block_index++;
                     print_width = 0;
                 }
 
+                uint16_t buffer_width = (fill) ? max_width : width;
                 uint16_t color = 0;
                 for (uint16_t yy = 0; yy < height; yy++) {
-                    for (uint16_t xx = 0; xx < width; xx++) {
-                        if (background_data && (xx <= background_width && yy <= background_height)) {
-                            if (get_color(bpp) == bg_color) {
-                                color = background_data[(yy * background_width + xx)];
+                    for (uint16_t xx = 0; xx < buffer_width; xx++) {
+                        if (background_data && ((total_width + xx) <= background_width && yy <= background_height)) {
+                            if (xx >= width || get_color(bpp) == bg_color) {
+                                color = background_data[(yy * background_width + (total_width + xx))];
                             } else {
                                 color = fg_color;
                             }
@@ -947,23 +939,22 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         self->i2c_buffer[(print_width + xx) + (yy * block_widths[block_index])] = color;
                     }
                 }
-                uint16_t x2 = x + buffer_width - 1;
-                if (x2 < self->width) {
-                    print_width += width;
+                if (print_width + buffer_width - 1 < self->width) {
+                    print_width += buffer_width;
+                    total_width += buffer_width;
                 }
 
-                x += width;
                 break;
             }
             char_index++;
         }
     }
 
-    if (print_width > 0) {
-        set_window(self, print_x, y, print_x+block_widths[block_index]-1, y+height-1);
+    if (print_width>0) {
+        set_window(self, print_x, y, print_x+print_width-1, y+height-1);
         DC_HIGH();
         CS_LOW();
-        write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_widths[block_index]*height*2);
+        write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, print_width*height*2);
         CS_HIGH();
     }
 
@@ -971,7 +962,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         m_free(self->i2c_buffer);
     }
 
-    return mp_obj_new_int(print_width);
+    return mp_obj_new_int(total_width);
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(st7789_ST7789_write_obj, 5, 9, st7789_ST7789_write);
 
