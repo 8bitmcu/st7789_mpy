@@ -829,41 +829,44 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         buf_size = self->buffer_size;
     }
 
-    // The idea here to is to build a table of block_widths, each
-    // blocks reprensents a single SPI transaction of one or more
-    // character(s).
+
+    // the idea is to build a table of block_widths, each block
+    // reprensents a single SPI transaction of one or more character(s).
     uint16_t block_count = 0;
     uint16_t block_widths[str_len];
     uint16_t block_width = 0;
     const byte *s = str_data, *top = str_data + str_len;
-    while (s < top) {
-        unichar ch;
-        ch = utf8_get_char(s);
-        s = utf8_next_char(s);
+    // we only start seeing gains in speed beyond 1 character
+    if (str_len > 1) {
+        while (s < top) {
+            unichar ch;
+            ch = utf8_get_char(s);
+            s = utf8_next_char(s);
 
-        const byte *map_s = map_data, *map_top = map_data + map_len;
-        uint16_t char_index = 0;
-        while (map_s < map_top) {
-            unichar map_ch;
-            map_ch = utf8_get_char(map_s);
-            map_s = utf8_next_char(map_s);
+            const byte *map_s = map_data, *map_top = map_data + map_len;
+            uint16_t char_index = 0;
+            while (map_s < map_top) {
+                unichar map_ch;
+                map_ch = utf8_get_char(map_s);
+                map_s = utf8_next_char(map_s);
 
-            if (ch == map_ch) {
-                uint16_t w = (fill) ? max_width : widths_data[char_index];
+                if (ch == map_ch) {
+                    uint16_t w = (fill) ? max_width : widths_data[char_index];
 
-                if ((block_width + w) * height * 2 > buf_size) {
-                    block_widths[block_count++] = block_width;
-                    block_width = 0;
+                    if ((block_width + w) * height * 2 > buf_size) {
+                        block_widths[block_count++] = block_width;
+                        block_width = 0;
+                    }
+
+                    block_width += w;
+                    break;
                 }
-
-                block_width += w;
-                break;
+                char_index++;
             }
-            char_index++;
         }
-    }
-    if (block_width > 0) {
-        block_widths[block_count++] = block_width;
+        if (block_width > 0) {
+            block_widths[block_count++] = block_width;
+        }
     }
 
     uint16_t block_index = 0;
@@ -906,6 +909,9 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
                 uint16_t buffer_width = (fill) ? max_width : width;
                 uint16_t color = 0;
+                if (str_len == 1) {
+                    block_widths[0] = buffer_width;
+                }
                 for (uint16_t yy = 0; yy < height; yy++) {
                     for (uint16_t xx = 0; xx < buffer_width; xx++) {
                         if (background_data && ((print_width + xx) <= background_width && yy <= background_height)) {
