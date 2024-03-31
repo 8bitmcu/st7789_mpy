@@ -817,14 +817,8 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     mp_obj_t map_obj = mp_obj_dict_get(dict, MP_OBJ_NEW_QSTR(MP_QSTR_MAP));
     GET_STR_DATA_LEN(map_obj, map_data, map_len);
     GET_STR_DATA_LEN(args[2], str_data, str_len);
-    const byte *s = str_data, *top = str_data + str_len;
-    const byte *s2 = str_data, *top2 = str_data + str_len;
 
     size_t buf_size = 0;
-    uint16_t block_count = 0;
-    uint16_t block_widths[str_len];
-    uint16_t block_width = 0;
-
     if (self->buffer_size == 0) {
         // allocate buffer large enough for the largest character
         // if a buffer was not specified during the driver init.
@@ -838,6 +832,10 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     // The idea here to is to build a table of block_widths, each
     // blocks reprensents a single SPI transaction of one or more
     // character(s).
+    uint16_t block_count = 0;
+    uint16_t block_widths[str_len];
+    uint16_t block_width = 0;
+    const byte *s = str_data, *top = str_data + str_len;
     while (s < top) {
         unichar ch;
         ch = utf8_get_char(s);
@@ -869,12 +867,14 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     }
 
     uint16_t block_index = 0;
-    uint16_t total_width = 0;
+    uint16_t print_width = 0;
     block_width = 0;
-    while (s2 < top2) {
+    s = str_data;
+    top = str_data + str_len;
+    while (s < top) {
         unichar ch;
-        ch = utf8_get_char(s2);
-        s2 = utf8_next_char(s2);
+        ch = utf8_get_char(s);
+        s = utf8_next_char(s);
 
         const byte *map_s = map_data, *map_top = map_data + map_len;
         uint16_t char_index = 0;
@@ -885,7 +885,6 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
             if (ch == map_ch) {
                 uint8_t width = widths_data[char_index];
-                uint16_t buffer_width = (fill) ? max_width : width;
                 bs_bit = 0;
 
                 switch (offset_width) {
@@ -905,23 +904,13 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         break;
                 }
 
-                if (block_width == block_widths[block_index]) {
-                    set_window(self, x, y, x + block_width - 1, y + height - 1);
-                    DC_HIGH();
-                    CS_LOW();
-                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_width * height * 2);
-                    CS_HIGH();
-                    x += block_width;
-                    block_index++;
-                    block_width = 0;
-                }
-
+                uint16_t buffer_width = (fill) ? max_width : width;
                 uint16_t color = 0;
                 for (uint16_t yy = 0; yy < height; yy++) {
                     for (uint16_t xx = 0; xx < buffer_width; xx++) {
-                        if (background_data && ((total_width + xx) <= background_width && yy <= background_height)) {
+                        if (background_data && ((print_width + xx) <= background_width && yy <= background_height)) {
                             if (xx >= width || get_color(bpp) == bg_color) {
-                                color = background_data[(yy * background_width + (total_width + xx))];
+                                color = background_data[(yy * background_width + (print_width + xx))];
                             } else {
                                 color = fg_color;
                             }
@@ -933,7 +922,18 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                 }
                 if (block_width + buffer_width - 1 < self->width) {
                     block_width += buffer_width;
-                    total_width += buffer_width;
+                    print_width += buffer_width;
+                }
+
+                if (block_width == block_widths[block_index]) {
+                    set_window(self, x, y, x + block_width - 1, y + height - 1);
+                    DC_HIGH();
+                    CS_LOW();
+                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_width * height * 2);
+                    CS_HIGH();
+                    x += block_width;
+                    block_index++;
+                    block_width = 0;
                 }
                 break;
             }
@@ -941,19 +941,11 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         }
     }
 
-    if (block_width > 0) {
-        set_window(self, x, y, x + block_width - 1, y + height - 1);
-        DC_HIGH();
-        CS_LOW();
-        write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, block_width * height * 2);
-        CS_HIGH();
-    }
-
     if (self->buffer_size == 0) {
         m_free(self->i2c_buffer);
     }
 
-    return mp_obj_new_int(total_width);
+    return mp_obj_new_int(print_width);
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(st7789_ST7789_write_obj, 5, 9, st7789_ST7789_write);
 
