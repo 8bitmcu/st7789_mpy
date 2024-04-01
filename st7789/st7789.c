@@ -760,6 +760,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(st7789_ST7789_write_len_obj, 3, 3, st
 //	write(font_module, s, x, y[, fg, bg, background_tuple, fill])
 //		background_tuple (bitmap_buffer, width, height)
 //
+
 static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     st7789_ST7789_obj_t *self = MP_OBJ_TO_PTR(args[0]);
     mp_obj_module_t *font = MP_OBJ_TO_PTR(args[1]);
@@ -819,7 +820,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
     size_t buf_size = 0;
     if (self->buffer_size == 0) {
-        // allocate buffer large enough for the largest character
+        // allocate buffer large enough for the widest character in the font
         // if a buffer was not specified during the driver init.
         buf_size = max_width * height * 2;
         self->i2c_buffer = m_malloc(buf_size);
@@ -828,8 +829,6 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
         buf_size = self->buffer_size;
     }
 
-    // we only see gains in speed when buffering more than one character
-    bool build_blocks = str_len > 1 || buf_size > max_width * height * 2;
 
     // the idea is to build a table of block_widths, each block
     // reprensents a single SPI transaction of one or more character(s).
@@ -837,6 +836,9 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     uint16_t block_widths[str_len];
     uint16_t block_width = 0;
     const byte *s = str_data, *top = str_data + str_len;
+
+    // we only see gains in speed when buffering more than one character
+    bool build_blocks = str_len > 1 || buf_size > max_width * height * 2;
     if (build_blocks) {
         while (s < top) {
             unichar ch;
@@ -851,7 +853,10 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                 map_s = utf8_next_char(map_s);
 
                 if (ch == map_ch) {
-                    uint16_t w = (fill) ? max_width : widths_data[char_index];
+                    uint16_t w = widths_data[char_index];
+                    if (fill && s == top) {
+                        w = max_width;
+                    }
 
                     if ((block_width + w) * height * 2 > buf_size) {
                         block_widths[block_count++] = block_width;
@@ -907,11 +912,14 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         break;
                 }
 
-                uint16_t buffer_width = (fill) ? max_width : width;
-                uint16_t color = 0;
+                uint16_t buffer_width = widths_data[char_index];
+                if (fill && s == top) {
+                    buffer_width = max_width;
+                }
                 if (!build_blocks) {
                     block_widths[block_index] = buffer_width;
                 }
+                uint16_t color = 0;
                 for (uint16_t yy = 0; yy < height; yy++) {
                     for (uint16_t xx = 0; xx < buffer_width; xx++) {
                         if (background_data && ((print_width + xx) <= background_width && yy <= background_height)) {
