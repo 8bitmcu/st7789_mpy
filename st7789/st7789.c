@@ -1100,37 +1100,48 @@ static mp_obj_t st7789_ST7789_text(size_t n_args, const mp_obj_t *args) {
     if (self->buffer_size == 0) {
         self->i2c_buffer = m_malloc(buf_size);
     }
+    else {
+        buf_size = self->buffer_size;
+    }
 
-    uint8_t chr;
+    // calculate how many characters we can fit in the buffer
+    uint8_t buf_blocks = buf_size / (width * height * 2);
+    if (source_len <= buf_blocks) {
+        buf_blocks = source_len;
+    }
+
+    uint8_t block_index = 0;
+    uint16_t bufwidth = buf_blocks * width;
+
+    uint8_t chr, x, chr_data;
     if (self->i2c_buffer) {
-    while (source_len--) {
-        chr = *source++;
+        while (source_len--) {
+            chr = *source++;
             if (chr >= first && chr <= last) {
-                uint16_t buf_idx = 0;
                 uint16_t chr_idx = (chr - first) * (height * wide);
-                for (uint8_t line = 0; line < height; line++) {
-                    for (uint8_t line_byte = 0; line_byte < wide; line_byte++) {
-                        uint8_t chr_data = font_data[chr_idx];
-                        for (uint8_t bit = 8; bit; bit--) {
-                            if (chr_data >> (bit - 1) & 1) {
-                                self->i2c_buffer[buf_idx] = fg_color;
-                            } else {
-                                self->i2c_buffer[buf_idx] = bg_color;
-                            }
-                            buf_idx++;
+                for (uint8_t y = 0; y < height; y++) {
+                    x = 0;
+                    chr_data = font_data[chr_idx];
+                    for (uint8_t bit = 8; bit; bit--) {
+                        if (chr_data >> (bit - 1) & 1) {
+                            self->i2c_buffer[(block_index * width) + x + (y * bufwidth)] = fg_color;
+                        } else {
+                            self->i2c_buffer[(block_index * width) + x + (y * bufwidth)] = bg_color;
                         }
-                        chr_idx++;
+                        x++;
                     }
+                    chr_idx++;
                 }
-                uint16_t x1 = x0 + width - 1;
-                if (x1 < self->width) {
-                    set_window(self, x0, y0, x1, y0 + height - 1);
+                block_index++;
+                if (block_index == buf_blocks) {
+                    set_window(self, x0, y0, x0 + (bufwidth) - 1, y0 + height - 1);
                     DC_HIGH();
                     CS_LOW();
-                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, buf_size);
+                    write_spi(self->spi_obj, (uint8_t *)self->i2c_buffer, bufwidth * height * 2);
                     CS_HIGH();
+                    block_index = 0;
+                    x0 += bufwidth;
                 }
-                x0 += width;
             }
         }
         if (self->buffer_size == 0) {
