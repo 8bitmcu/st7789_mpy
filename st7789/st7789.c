@@ -838,7 +838,7 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
     const byte *s = str_data, *top = str_data + str_len;
 
     // we only see gains in speed when buffering more than one character
-    bool build_blocks = str_len > 1 || buf_size > max_width * height * 2;
+    bool build_blocks = str_len > 1 && buf_size > max_width * height * 2;
     if (build_blocks) {
         while (s < top) {
             unichar ch;
@@ -876,6 +876,8 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
 
     uint16_t block_index = 0;
     uint16_t print_width = 0;
+    uint16_t color;
+    uint8_t width, char_width;
     block_width = 0;
     s = str_data;
     top = str_data + str_len;
@@ -892,7 +894,6 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
             map_s = utf8_next_char(map_s);
 
             if (ch == map_ch) {
-                uint8_t width = widths_data[char_index];
                 bs_bit = 0;
 
                 switch (offset_width) {
@@ -912,16 +913,18 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         break;
                 }
 
-                uint16_t buffer_width = widths_data[char_index];
+                width = widths_data[char_index];
                 if (fill && s == top) {
-                    buffer_width = max_width;
+                    char_width = max_width;
+                }
+                else {
+                    char_width = width;
                 }
                 if (!build_blocks) {
-                    block_widths[block_index] = buffer_width;
+                    block_widths[block_index] = char_width;
                 }
-                uint16_t color = 0;
                 for (uint16_t yy = 0; yy < height; yy++) {
-                    for (uint16_t xx = 0; xx < buffer_width; xx++) {
+                    for (uint16_t xx = 0; xx < char_width; xx++) {
                         if (background_data && ((print_width + xx) <= background_width && yy <= background_height)) {
                             if (xx >= width || get_color(bpp) == bg_color) {
                                 color = background_data[(yy * background_width + (print_width + xx))];
@@ -934,9 +937,9 @@ static mp_obj_t st7789_ST7789_write(size_t n_args, const mp_obj_t *args) {
                         self->i2c_buffer[(block_width + xx) + (yy * block_widths[block_index])] = color;
                     }
                 }
-                if (block_width + buffer_width - 1 < self->width) {
-                    block_width += buffer_width;
-                    print_width += buffer_width;
+                if (block_width + char_width - 1 < self->width) {
+                    block_width += char_width;
+                    print_width += char_width;
                 }
 
                 if (block_width == block_widths[block_index]) {
